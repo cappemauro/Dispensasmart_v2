@@ -14,23 +14,27 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AddShoppingCart
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.RestorePage
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Kitchen
 import androidx.compose.material.icons.filled.ShoppingCart
-import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +42,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.Prodotto
+import com.example.ui.components.KeepSyncDialog
 import com.example.ui.theme.ForestGreenPrimary
 import com.example.viewmodel.DispensaViewModel
 
@@ -64,7 +70,55 @@ fun ModuloSpesaScreen(
     val prodottiSpesa by viewModel.prodottiSpesa.collectAsStateWithLifecycle()
     val isKeepIntegrationEnabled by viewModel.isKeepIntegrationEnabled.collectAsStateWithLifecycle()
     val keepNoteTitle by viewModel.keepNoteTitle.collectAsStateWithLifecycle()
+    val keepLastSyncMessage by viewModel.keepLastSyncMessage.collectAsStateWithLifecycle()
+    val selectedFilter by viewModel.selectedSpesaFilter.collectAsStateWithLifecycle()
+
+    var showKeepSyncDialog by remember { mutableStateOf(false) }
+    var showEditTitleDialog by remember { mutableStateOf(false) }
+    var editTitleText by remember(keepNoteTitle) { mutableStateOf(keepNoteTitle) }
     var nuovoArticoloNome by remember { mutableStateOf("") }
+
+    if (showEditTitleDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditTitleDialog = false },
+            title = { Text("Nome della Lista Keep") },
+            text = {
+                Column {
+                    Text(
+                        text = "Imposta il titolo esatto della nota da sincronizzare o visualizzare:",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = editTitleText,
+                        onValueChange = { editTitleText = it },
+                        placeholder = { Text("es. Lista della Spesa, Esselunga") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (editTitleText.isNotBlank()) {
+                            viewModel.setKeepNoteTitle(editTitleText.trim())
+                        }
+                        showEditTitleDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ForestGreenPrimary)
+                ) {
+                    Text("Salva")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditTitleDialog = false }) {
+                    Text("Annulla")
+                }
+            }
+        )
+    }
 
     Column(
         modifier = modifier
@@ -72,7 +126,11 @@ fun ModuloSpesaScreen(
             .background(MaterialTheme.colorScheme.background)
             .padding(16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Intestazione
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Icon(
                 imageVector = Icons.Default.ShoppingCart,
                 contentDescription = "Spesa",
@@ -80,21 +138,77 @@ fun ModuloSpesaScreen(
                 modifier = Modifier.size(28.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Lista della Spesa 🛒",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Lista della Spesa 🛒",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    text = "Articoli da acquistare e sincronizzazione Keep",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
-        Text(
-            text = "Articoli da acquistare. Spuntali quando li compri per contrassegnarli come acquistati.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Spacer(modifier = Modifier.height(12.dp))
 
-        Spacer(modifier = Modifier.height(16.dp))
+        // Filtri Lista (Tutti / Dispensa / Keep)
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            item {
+                FilterChip(
+                    selected = selectedFilter == "Tutti",
+                    onClick = { viewModel.setSelectedSpesaFilter("Tutti") },
+                    label = { Text("Tutti") },
+                    leadingIcon = {
+                        Icon(imageVector = Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(16.dp))
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ForestGreenPrimary,
+                        selectedLabelColor = Color.White
+                    )
+                )
+            }
+
+            item {
+                FilterChip(
+                    selected = selectedFilter == "Dispensa",
+                    onClick = { viewModel.setSelectedSpesaFilter("Dispensa") },
+                    label = { Text("Da Dispensa (Esauriti)") },
+                    leadingIcon = {
+                        Icon(imageVector = Icons.Default.Kitchen, contentDescription = null, modifier = Modifier.size(16.dp))
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ForestGreenPrimary,
+                        selectedLabelColor = Color.White
+                    )
+                )
+            }
+
+            if (isKeepIntegrationEnabled) {
+                item {
+                    FilterChip(
+                        selected = selectedFilter == "Keep",
+                        onClick = { viewModel.setSelectedSpesaFilter("Keep") },
+                        label = { Text("Keep: $keepNoteTitle") },
+                        leadingIcon = {
+                            Icon(imageVector = Icons.AutoMirrored.Filled.FormatListBulleted, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = ForestGreenPrimary,
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Quick Manual Add Field
         Row(
@@ -104,7 +218,12 @@ fun ModuloSpesaScreen(
             OutlinedTextField(
                 value = nuovoArticoloNome,
                 onValueChange = { nuovoArticoloNome = it },
-                placeholder = { Text("Aggiungi prodotto alla spesa...") },
+                placeholder = {
+                    Text(
+                        if (selectedFilter == "Keep") "Aggiungi a '$keepNoteTitle'..."
+                        else "Aggiungi prodotto alla spesa..."
+                    )
+                },
                 singleLine = true,
                 modifier = Modifier
                     .weight(1f)
@@ -114,6 +233,7 @@ fun ModuloSpesaScreen(
             Button(
                 onClick = {
                     if (nuovoArticoloNome.isNotBlank()) {
+                        val isForKeep = selectedFilter == "Keep"
                         viewModel.insertProdotto(
                             Prodotto(
                                 nome = nuovoArticoloNome.trim(),
@@ -121,6 +241,8 @@ fun ModuloSpesaScreen(
                                 quantita = 0,
                                 dataScadenza = System.currentTimeMillis() + (30L * 86400000L),
                                 inListaSpesa = true,
+                                daKeep = isForKeep,
+                                note = if (isForKeep) "Keep: $keepNoteTitle" else "",
                                 comprato = false
                             )
                         )
@@ -135,30 +257,93 @@ fun ModuloSpesaScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
+        // Riquadro Keep dedicato (quando attivo)
         if (isKeepIntegrationEnabled) {
-            OutlinedButton(
-                onClick = { viewModel.sincronizzaConGoogleKeep() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("button_quick_keep_sync_spesa")
+            Card(
+                shape = RoundedCornerShape(10.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
-                    contentDescription = "Controlla Keep",
-                    tint = ForestGreenPrimary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+                        contentDescription = "Keep",
+                        tint = ForestGreenPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Lista Keep:",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = keepNoteTitle,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ForestGreenPrimary
+                            )
+                            IconButton(
+                                onClick = {
+                                    editTitleText = keepNoteTitle
+                                    showEditTitleDialog = true
+                                },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Modifica titolo",
+                                    tint = ForestGreenPrimary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { showKeepSyncDialog = true },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.testTag("button_quick_keep_sync_spesa")
+                    ) {
+                        Text("Sincronizza / Cerca", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            if (!keepLastSyncMessage.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Controlla Nota Keep ('$keepNoteTitle')",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = ForestGreenPrimary
+                    text = keepLastSyncMessage!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = ForestGreenPrimary,
+                    fontWeight = FontWeight.Medium
                 )
             }
-            Spacer(modifier = Modifier.height(12.dp))
+
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        if (showKeepSyncDialog) {
+            KeepSyncDialog(
+                initialNoteTitle = keepNoteTitle,
+                onTitleChange = { viewModel.setKeepNoteTitle(it) },
+                onImport = { content, title ->
+                    viewModel.setKeepNoteTitle(title)
+                    viewModel.sincronizzaConGoogleKeep(content, title)
+                },
+                onClearKeepItems = { viewModel.rimuoviTuttiProdottiDaKeep() },
+                onDismiss = { showKeepSyncDialog = false }
+            )
         }
 
         val spuntatiCount = prodottiSpesa.count { it.comprato }
@@ -186,7 +371,7 @@ fun ModuloSpesaScreen(
                     fontSize = 13.sp
                 )
             }
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
         }
 
         if (prodottiSpesa.isEmpty()) {
@@ -198,22 +383,26 @@ fun ModuloSpesaScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        imageVector = Icons.Default.AddShoppingCart,
-                        contentDescription = "Lista Vuota",
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                        imageVector = Icons.Default.ShoppingCart,
+                        contentDescription = "Spesa vuota",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                         modifier = Modifier.size(64.dp)
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "La lista della spesa è vuota! 🎉",
+                        text = if (selectedFilter == "Keep") "Nessun articolo per '$keepNoteTitle'"
+                               else if (selectedFilter == "Dispensa") "Nessun prodotto esaurito in dispensa"
+                               else "La lista della spesa è vuota",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Quando un articolo con scorta minima finisce in dispensa, verrà aggiunto automaticamente qui.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = if (selectedFilter == "Keep") "Tocca 'Sincronizza / Cerca' o aggiungi un prodotto in alto."
+                               else "I prodotti consumati in dispensa o importati da Keep compariranno qui.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 }
             }
@@ -262,12 +451,17 @@ fun ModuloSpesaScreen(
                                     )
                                     if (prodotto.daKeep) {
                                         Spacer(modifier = Modifier.width(6.dp))
+                                        val keepTag = if (prodotto.note.startsWith("Keep:")) {
+                                            "📌 " + prodotto.note.removePrefix("Keep:").trim().ifBlank { "Keep" }
+                                        } else {
+                                            "📌 Keep"
+                                        }
                                         Surface(
                                             shape = RoundedCornerShape(6.dp),
                                             color = ForestGreenPrimary.copy(alpha = 0.15f)
                                         ) {
                                             Text(
-                                                text = "📌 Keep",
+                                                text = keepTag,
                                                 fontSize = 10.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = ForestGreenPrimary,
@@ -293,7 +487,7 @@ fun ModuloSpesaScreen(
                                 modifier = Modifier.testTag("restore_item_button_${prodotto.id}")
                             ) {
                                 Icon(
-                                    imageVector = if (isComprato) Icons.Default.CheckCircle else Icons.Default.CheckCircle,
+                                    imageVector = Icons.Default.CheckCircle,
                                     contentDescription = if (isComprato) "Spuntato" else "Comprato",
                                     modifier = Modifier.size(16.dp)
                                 )

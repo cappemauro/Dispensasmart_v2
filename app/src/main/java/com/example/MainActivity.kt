@@ -54,6 +54,7 @@ import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.pointer.pointerInput
@@ -69,6 +70,8 @@ import android.content.pm.PackageManager
 import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : ComponentActivity() {
+    var pendingSharedKeepText by mutableStateOf<Pair<String, String?>?>(null)
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
@@ -79,6 +82,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleSendIntent(intent)
         
         // Request POST_NOTIFICATIONS on Android 13+ and start service
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -95,6 +99,22 @@ class MainActivity : ComponentActivity() {
         setContent {
             DispensaSmartTheme {
                 DispensaSmartApp()
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleSendIntent(intent)
+    }
+
+    private fun handleSendIntent(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
+            val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+            val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+            if (!text.isNullOrBlank()) {
+                pendingSharedKeepText = Pair(text, subject)
             }
         }
     }
@@ -134,7 +154,21 @@ fun DispensaSmartApp() {
     val spesaCount = prodottiSpesa.size
     
     val context = LocalContext.current
+    val activity = context as? MainActivity
     var lastInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(activity?.pendingSharedKeepText) {
+        activity?.pendingSharedKeepText?.let { (text, subject) ->
+            viewModel.importaProdottiDaKeepTesto(text, subject)
+            navController.navigate(NavItem.Spesa.route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+            }
+            activity.pendingSharedKeepText = null
+        }
+    }
 
     LaunchedEffect(lastInteractionTime) {
         delay(60_000L) // Esempio: 60 secondi di timeout (collegabile poi alle preferenze condivise)

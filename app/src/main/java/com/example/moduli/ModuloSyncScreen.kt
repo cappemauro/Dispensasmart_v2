@@ -46,6 +46,11 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Launch
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.ui.platform.LocalClipboardManager
+import com.example.util.GoogleKeepHelper
 import com.example.ui.theme.ExpiryRed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -335,6 +340,8 @@ fun ModuloSyncScreen(
             val isKeepIntegrationEnabled by viewModel.isKeepIntegrationEnabled.collectAsStateWithLifecycle()
             val keepNoteTitle by viewModel.keepNoteTitle.collectAsStateWithLifecycle()
             val keepLastSyncMessage by viewModel.keepLastSyncMessage.collectAsStateWithLifecycle()
+            val context = LocalContext.current
+            val clipboardManager = LocalClipboardManager.current
             var inputNoteTitle by remember(keepNoteTitle) { mutableStateOf(keepNoteTitle) }
             var showImportDialog by remember { mutableStateOf(false) }
             var importTextContent by remember { mutableStateOf("") }
@@ -421,26 +428,96 @@ fun ModuloSyncScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Button(
-                                onClick = { viewModel.sincronizzaConGoogleKeep() },
+                                onClick = {
+                                    GoogleKeepHelper.openKeepSearch(context, inputNoteTitle)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("button_open_keep")
+                            ) {
+                                Icon(imageVector = Icons.Default.Launch, contentDescription = "Apri in Keep", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Apri in Keep", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            Button(
+                                onClick = {
+                                    val clip = clipboardManager.getText()?.text ?: ""
+                                    if (clip.isNotBlank()) {
+                                        importTextContent = clip
+                                        showImportDialog = true
+                                        Toast.makeText(context, "Testo incollato! Verifica l'anteprima.", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "Nessun testo trovato negli appunti", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
                                 colors = ButtonDefaults.buttonColors(containerColor = ForestGreenPrimary),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .testTag("button_sync_keep")
+                                    .testTag("button_paste_keep_clipboard")
                             ) {
-                                Icon(imageVector = Icons.Default.Sync, contentDescription = "Controlla Keep", modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Controlla Keep", fontSize = 12.sp)
+                                Icon(imageVector = Icons.Default.ContentPaste, contentDescription = "Incolla Appunti", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Incolla Testo", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
                             OutlinedButton(
-                                onClick = { showImportDialog = true },
+                                onClick = {
+                                    val clip = clipboardManager.getText()?.text ?: ""
+                                    if (clip.isNotBlank() && importTextContent.isBlank()) {
+                                        importTextContent = clip
+                                    }
+                                    showImportDialog = true
+                                },
                                 modifier = Modifier
                                     .weight(1f)
                                     .testTag("button_import_text_keep")
                             ) {
-                                Icon(imageVector = Icons.Default.FileUpload, contentDescription = "Incolla Testo", modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Importa Testo", fontSize = 12.sp)
+                                Icon(imageVector = Icons.Default.FileUpload, contentDescription = "Importa Testo", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Scrivi Testo", fontSize = 11.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.rimuoviTuttiProdottiDaKeep()
+                                Toast.makeText(context, "Articoli Keep rimossi dalla lista della spesa", Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("button_clear_keep_items")
+                        ) {
+                            Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Pulisci articoli Keep dalla spesa", fontSize = 11.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Card(
+                            shape = RoundedCornerShape(8.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = "💡 Come sincronizzare i prodotti reali da Google Keep:",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "1. Tocca 'Apri in Keep': l'app cerca la nota '$inputNoteTitle' e copia il nome negli appunti.\n2. Nella nota, tocca ⋮ -> Invia -> Invia tramite altra app -> seleziona Dispensa Smart (importa subito con il titolo corretto!).\n3. In alternativa: copia il testo della lista e tocca 'Incolla Testo' con anteprima.",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    lineHeight = 14.sp
+                                )
                             }
                         }
 
@@ -465,13 +542,21 @@ fun ModuloSyncScreen(
             }
 
             if (showImportDialog) {
+                val previewItems = remember(importTextContent, inputNoteTitle) {
+                    if (importTextContent.isNotBlank()) {
+                        com.example.util.GoogleKeepHelper.cleanAndExtractKeepItems(importTextContent, inputNoteTitle)
+                    } else {
+                        emptyList()
+                    }
+                }
+
                 AlertDialog(
                     onDismissRequest = { showImportDialog = false },
-                    title = { Text("Incolla contenuto nota Keep") },
+                    title = { Text("Importa articoli da '$inputNoteTitle'") },
                     text = {
                         Column {
                             Text(
-                                text = "Inserisci o incolla qui i prodotti dalla tua nota Google Keep (uno per riga):",
+                                text = "Inserisci o incolla qui i prodotti dalla tua nota Google Keep:",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -482,21 +567,32 @@ fun ModuloSyncScreen(
                                 placeholder = { Text("- Latte\n- Pane\n- Caffè") },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(140.dp)
+                                    .height(120.dp)
                                     .testTag("input_keep_text_content")
                             )
+
+                            if (previewItems.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "📋 Articoli rilevati (${previewItems.size}): ${previewItems.joinToString(", ")}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = ForestGreenPrimary
+                                )
+                            }
                         }
                     },
                     confirmButton = {
                         Button(
                             onClick = {
-                                viewModel.sincronizzaConGoogleKeep(importTextContent)
+                                viewModel.sincronizzaConGoogleKeep(importTextContent, inputNoteTitle)
                                 importTextContent = ""
                                 showImportDialog = false
                             },
+                            enabled = previewItems.isNotEmpty(),
                             colors = ButtonDefaults.buttonColors(containerColor = ForestGreenPrimary)
                         ) {
-                            Text("Importa")
+                            Text("Importa (${previewItems.size})")
                         }
                     },
                     dismissButton = {

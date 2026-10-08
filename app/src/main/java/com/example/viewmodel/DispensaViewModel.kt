@@ -93,53 +93,117 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
         isKeepIntegrationEnabled.value = enabled
     }
 
-    fun setKeepNoteTitle(title: String) {
-        prefs.edit().putString("keep_note_title", title).apply()
-        keepNoteTitle.value = title
+    val selectedSpesaFilter = MutableStateFlow("Tutti") // "Tutti", "Dispensa", "Keep"
+
+    fun setSelectedSpesaFilter(filter: String) {
+        selectedSpesaFilter.value = filter
     }
 
-    fun sincronizzaConGoogleKeep(customTextContent: String? = null) {
+    fun setKeepNoteTitle(title: String) {
+        val clean = title.trim()
+        prefs.edit().putString("keep_note_title", clean).apply()
+        keepNoteTitle.value = clean
+        keepLastSyncMessage.value = "Titolo lista Keep impostato: '$clean'"
+    }
+
+    fun rimuoviTuttiProdottiDaKeep() {
         viewModelScope.launch {
-            val title = keepNoteTitle.value.ifBlank { "Lista della Spesa" }
-            val linesToProcess = if (!customTextContent.isNullOrBlank()) {
-                customTextContent.lines()
-                    .map { line ->
-                        line.replace(Regex("^[\\[\\]xX\\*\\-\\•\\s]+"), "").trim()
+            val all = repository.getAllProdottiList()
+            var count = 0
+            for (p in all) {
+                if (p.daKeep) {
+                    if (p.quantita <= 0) {
+                        markProductAsDeleted(p.id)
+                        repository.delete(p)
+                        syncService.deleteCloudProdotto(syncService.pantryCode, p.id)
+                    } else {
+                        val updated = p.copy(inListaSpesa = false, daKeep = false)
+                        repository.update(updated)
+                        syncService.pushProdotto(syncService.pantryCode, updated)
                     }
-                    .filter { it.isNotBlank() }
-            } else {
-                // Default items from Keep note with specified title
-                listOf("Latte Intero", "Pane Fresco", "Caffè in Polvere", "Insalata", "Marmellata")
+                    count++
+                }
+            }
+            keepLastSyncMessage.value = "🗑️ Rimossi $count articoli Keep dalla lista della spesa."
+            batchFeedbackMessage.value = "Lista spesa Keep svuotata ($count articoli)."
+            triggerAutoDriveBackup()
+        }
+    }
+
+    fun sincronizzaConGoogleKeep(
+        customTextContent: String? = null,
+        targetTitle: String? = null,
+        onResult: ((Int) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            val title = (targetTitle?.trim()?.ifBlank { null } ?: keepNoteTitle.value).ifBlank { "Lista della Spesa" }
+            if (customTextContent.isNullOrBlank()) {
+                keepLastSyncMessage.value = "⚠️ Nessun testo inserito. Copia la tua nota da Keep o usa 'Apri Keep' per recuperarla."
+                onResult?.invoke(0)
+                return@launch
+            }
+
+            val items = com.example.util.GoogleKeepHelper.cleanAndExtractKeepItems(customTextContent, title)
+            if (items.isEmpty()) {
+                keepLastSyncMessage.value = "⚠️ Nessun articolo valido trovato nel testo della nota '$title'."
+                onResult?.invoke(0)
+                return@launch
             }
 
             var countAdded = 0
             val currentProdotti = repository.getAllProdottiList()
 
-            for (itemText in linesToProcess) {
+            for (itemText in items) {
                 val existing = currentProdotti.find { it.nome.equals(itemText, ignoreCase = true) }
                 if (existing != null) {
                     if (!existing.inListaSpesa || !existing.daKeep) {
-                        repository.update(existing.copy(inListaSpesa = true, daKeep = true))
+                        val updated = existing.copy(
+                            inListaSpesa = true,
+                            daKeep = true,
+                            note = if (existing.note.isBlank()) "Keep: $title" else existing.note,
+                            comprato = false
+                        )
+                        repository.update(updated)
+                        syncService.pushProdotto(syncService.pantryCode, updated)
                         countAdded++
                     }
                 } else {
-                    repository.insert(
-                        Prodotto(
-                            nome = itemText,
-                            categoria = "Dispensa Secca",
-                            quantita = 0,
-                            quantitaMinima = 1,
-                            dataScadenza = System.currentTimeMillis() + (30L * 86400000L),
-                            inListaSpesa = true,
-                            daKeep = true
-                        )
+                    val (categoria, _) = aiService.inferisciCategoriaDaNomeEBarcode(itemText, "")
+                    val newProd = Prodotto(
+                        nome = itemText,
+                        categoria = categoria,
+                        quantita = 0,
+                        quantitaMinima = 1,
+                        dataScadenza = System.currentTimeMillis() + (30L * 86400000L),
+                        inListaSpesa = true,
+                        daKeep = true,
+                        note = "Keep: $title",
+                        comprato = false
                     )
+                    val newId = repository.insert(newProd)
+                    syncService.pushProdotto(syncService.pantryCode, newProd.copy(id = newId))
                     countAdded++
                 }
             }
 
-            keepLastSyncMessage.value = "✅ Controllata nota Keep '$title': $countAdded prodotti attivi in spesa."
+            if (countAdded > 0) {
+                keepLastSyncMessage.value = "✅ Importati con successo $countAdded prodotti per la lista '$title'!"
+                batchFeedbackMessage.value = "🛒 Aggiunti $countAdded prodotti da Keep ('$title') alla spesa!"
+            } else {
+                keepLastSyncMessage.value = "ℹ️ Gli articoli della nota '$title' erano già presenti nella spesa."
+            }
             triggerAutoDriveBackup()
+            onResult?.invoke(countAdded)
+        }
+    }
+
+    fun importaProdottiDaKeepTesto(rawText: String, subject: String? = null) {
+        viewModelScope.launch {
+            val title = if (!subject.isNullOrBlank()) subject.trim() else keepNoteTitle.value.ifBlank { "Lista della Spesa" }
+            if (!subject.isNullOrBlank()) {
+                setKeepNoteTitle(subject.trim())
+            }
+            sincronizzaConGoogleKeep(rawText, title)
         }
     }
 
@@ -158,11 +222,27 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
     val scaricoSessionQueue = MutableStateFlow<List<SessionItemScarico>>(emptyList())
     val batchFeedbackMessage = MutableStateFlow<String?>(null)
 
+    private val persistedDeletedIds: MutableSet<String> = (prefs.getStringSet("persisted_deleted_ids", emptySet()) ?: emptySet()).toMutableSet()
     private val deletedProductIds = mutableSetOf<Long>()
+
+    private fun markProductAsDeleted(id: Long) {
+        deletedProductIds.add(id)
+        synchronized(persistedDeletedIds) {
+            persistedDeletedIds.add(id.toString())
+            prefs.edit().putStringSet("persisted_deleted_ids", persistedDeletedIds).apply()
+        }
+    }
 
     init {
         val database = AppDatabase.getDatabase(application)
         repository = ProdottoRepository(database.prodottoDao())
+
+        // Carica gli ID cancellati memorizzati per evitare che il Cloud li re-inserisca
+        synchronized(persistedDeletedIds) {
+            for (idStr in persistedDeletedIds) {
+                idStr.toLongOrNull()?.let { deletedProductIds.add(it) }
+            }
+        }
 
         // Rimozione una-tantum dei campioni mock pre-caricati per iniziare con la dispensa pulita
         val hasCleanedSamples = prefs.getBoolean("has_cleaned_default_samples_v2", false)
@@ -185,12 +265,32 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
                 val current = repository.getAllProdottiList()
                 for (p in current) {
                     if (p.barcode in defaultSampleBarcodes || p.nome in defaultSampleNames) {
-                        deletedProductIds.add(p.id)
+                        markProductAsDeleted(p.id)
                         repository.delete(p)
                         syncService.deleteCloudProdotto(syncService.pantryCode, p.id)
                     }
                 }
                 prefs.edit().putBoolean("has_cleaned_default_samples_v2", true).apply()
+            }
+        }
+
+        // Rimozione una-tantum dei prodotti fittizi aggiunti erroneamente dal mock di Keep
+        val hasCleanedKeepMock = prefs.getBoolean("has_cleaned_keep_mock_v4", false)
+        if (!hasCleanedKeepMock) {
+            viewModelScope.launch {
+                val mockKeepNames = setOf(
+                    "Latte Intero", "Pane Fresco", "Caffè in Polvere", "Insalata", "Marmellata",
+                    "Latte", "Pane", "Caffè"
+                )
+                val current = repository.getAllProdottiList()
+                for (p in current) {
+                    if (p.daKeep && p.quantita == 0 && (p.nome in mockKeepNames || p.nome.isBlank())) {
+                        markProductAsDeleted(p.id)
+                        repository.delete(p)
+                        syncService.deleteCloudProdotto(syncService.pantryCode, p.id)
+                    }
+                }
+                prefs.edit().putBoolean("has_cleaned_keep_mock_v4", true).apply()
             }
         }
 
@@ -232,7 +332,7 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
                     if (cloudItems.isNotEmpty()) {
                         val localMap = localList.associateBy { it.id }
                         for (cItem in cloudItems) {
-                            if (deletedProductIds.contains(cItem.id)) {
+                            if (deletedProductIds.contains(cItem.id) || persistedDeletedIds.contains(cItem.id.toString())) {
                                 syncService.deleteCloudProdotto(syncService.pantryCode, cItem.id)
                                 continue
                             }
@@ -357,12 +457,26 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
 
     val prodottiSpesa: StateFlow<List<Prodotto>> = combine(
         repository.prodottiSpesa,
-        isKeepIntegrationEnabled
-    ) { list, isKeepEnabled ->
-        if (isKeepEnabled) {
-            list
-        } else {
-            list.filter { !it.daKeep }
+        isKeepIntegrationEnabled,
+        selectedSpesaFilter,
+        keepNoteTitle
+    ) { list, isKeepEnabled, filter, currentNoteTitle ->
+        when (filter) {
+            "Dispensa" -> list.filter { !it.daKeep }
+            "Keep" -> {
+                if (isKeepEnabled) {
+                    list.filter { it.daKeep }
+                } else {
+                    emptyList()
+                }
+            }
+            else -> { // "Tutti"
+                if (isKeepEnabled) {
+                    list
+                } else {
+                    list.filter { !it.daKeep }
+                }
+            }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -417,7 +531,7 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteProdotto(prodotto: Prodotto) {
         viewModelScope.launch {
-            deletedProductIds.add(prodotto.id)
+            markProductAsDeleted(prodotto.id)
             repository.delete(prodotto)
             syncService.deleteCloudProdotto(syncService.pantryCode, prodotto.id)
             triggerAutoDriveBackup()
@@ -426,7 +540,7 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
 
     fun deleteProdottoById(id: Long) {
         viewModelScope.launch {
-            deletedProductIds.add(id)
+            markProductAsDeleted(id)
             repository.deleteById(id)
             syncService.deleteCloudProdotto(syncService.pantryCode, id)
             triggerAutoDriveBackup()
@@ -548,12 +662,12 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
             if (prodotto.quantita <= 0) {
                 // Se la quantità in dispensa è 0 (prodotto consumato o inserito a mano solo per la spesa),
                 // lo eliminiamo completamente dal database così non ricompare in dispensa né in spesa
-                deletedProductIds.add(prodotto.id)
+                markProductAsDeleted(prodotto.id)
                 repository.delete(prodotto)
                 syncService.deleteCloudProdotto(syncService.pantryCode, prodotto.id)
             } else {
                 // Se invece in dispensa ci sono ancora unità fisiche (> 0), togliamo solo il flag della spesa
-                val updated = prodotto.copy(inListaSpesa = false, comprato = false)
+                val updated = prodotto.copy(inListaSpesa = false, daKeep = false, comprato = false)
                 repository.update(updated)
                 syncService.pushProdotto(syncService.pantryCode, updated)
             }
@@ -566,11 +680,11 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
             val attualiSpesa = prodottiSpesa.value.filter { it.comprato }
             for (p in attualiSpesa) {
                 if (p.quantita <= 0) {
-                    deletedProductIds.add(p.id)
+                    markProductAsDeleted(p.id)
                     repository.delete(p)
                     syncService.deleteCloudProdotto(syncService.pantryCode, p.id)
                 } else {
-                    val updated = p.copy(inListaSpesa = false, comprato = false)
+                    val updated = p.copy(inListaSpesa = false, daKeep = false, comprato = false)
                     repository.update(updated)
                     syncService.pushProdotto(syncService.pantryCode, updated)
                 }
