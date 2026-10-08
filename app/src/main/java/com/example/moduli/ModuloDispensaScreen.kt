@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Inventory2
@@ -41,6 +42,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedFilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -93,6 +95,8 @@ fun ModuloDispensaScreen(
     val isMinQuantityAlertEnabled by viewModel.isMinQuantityAlertEnabled.collectAsStateWithLifecycle()
     val isExpiryManagementEnabled by viewModel.isExpiryManagementEnabled.collectAsStateWithLifecycle()
     val daCatalogareCount by viewModel.daCatalogareCount.collectAsStateWithLifecycle()
+    val isCatalogingOffline by viewModel.isCatalogingOffline.collectAsStateWithLifecycle()
+    val batchFeedbackMessage by viewModel.batchFeedbackMessage.collectAsStateWithLifecycle()
     val isHeaderCompact by viewModel.isHeaderCompact.collectAsStateWithLifecycle()
 
     val categorie = listOf("Tutti", "Da Catalogare", "Dispensa Secca", "Frigo", "Surgelati", "Bevande", "Igiene/Casa")
@@ -332,6 +336,56 @@ fun ModuloDispensaScreen(
                 }
             }
 
+            AnimatedVisibility(visible = !batchFeedbackMessage.isNullOrBlank()) {
+                batchFeedbackMessage?.let { msg ->
+                    Card(
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .testTag("catalogazione_feedback_banner")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Esito",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = msg,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            IconButton(
+                                onClick = { viewModel.batchFeedbackMessage.value = null },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Chiudi",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             if (daCatalogareCount > 0) {
                 Card(
                     shape = RoundedCornerShape(12.dp),
@@ -367,7 +421,10 @@ fun ModuloDispensaScreen(
                                     color = MaterialTheme.colorScheme.onTertiaryContainer
                                 )
                                 Text(
-                                    text = "Scansionat${if (daCatalogareCount == 1) "o" else "i"} offline. Catalogazione automatica con connessione.",
+                                    text = if (isCatalogingOffline) 
+                                        "Ricerca e classificazione online in corso..." 
+                                    else 
+                                        "Scansionat${if (daCatalogareCount == 1) "o" else "i"} offline. Catalogazione automatica con connessione.",
                                     fontSize = 11.sp,
                                     color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f)
                                 )
@@ -376,11 +433,28 @@ fun ModuloDispensaScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = { viewModel.ricatalogaProdottiOffline() },
+                            enabled = !isCatalogingOffline,
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                             modifier = Modifier.testTag("btn_cataloga_ora")
                         ) {
-                            Text("Cataloga Ora", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            if (isCatalogingOffline) {
+                                CircularProgressIndicator(
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("In corso...", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Cataloga Ora", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }

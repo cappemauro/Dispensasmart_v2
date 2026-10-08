@@ -16,6 +16,7 @@ import com.example.servizi.BackupExportService
 import com.example.servizi.GoogleDriveState
 import com.example.servizi.SyncService
 import com.example.servizi.SyncStatusState
+import com.example.util.BarcodeSoundFeedback
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -149,6 +150,7 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
     val selectedProdottoForEdit = MutableStateFlow<Prodotto?>(null)
 
     val isAnalyzingBarcode = MutableStateFlow(false)
+    val isCatalogingOffline = MutableStateFlow(false)
     val barcodeScanMessage = MutableStateFlow<String?>(null)
 
     // Batch Multi-Scan Session Queues
@@ -208,14 +210,17 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
 
     private fun startRealTimeSyncEngine() {
         viewModelScope.launch {
+            var lastAutoCatalogTime = 0L
             while (true) {
                 delay(4000) // Poll every 4 seconds for real-time cloud sync across devices
                 try {
-                    if (isNetworkAvailable()) {
+                    val now = System.currentTimeMillis()
+                    if (isNetworkAvailable() && (now - lastAutoCatalogTime > 30000L)) {
                         val pendingList = repository.getAllProdottiList().filter { 
                             it.categoria.equals("Da Catalogare", ignoreCase = true) 
                         }
                         if (pendingList.isNotEmpty()) {
+                            lastAutoCatalogTime = now
                             ricatalogaProdottiOffline()
                         }
                     }
@@ -245,49 +250,81 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun ricatalogaProdottiOffline(onComplete: ((Int) -> Unit)? = null) {
+        if (isCatalogingOffline.value) return
         viewModelScope.launch {
-            val pendingList = repository.getAllProdottiList().filter { 
-                it.categoria.equals("Da Catalogare", ignoreCase = true) 
-            }
-            if (pendingList.isEmpty()) {
-                onComplete?.invoke(0)
-                return@launch
-            }
-
-            var countCatalogati = 0
-            for (prod in pendingList) {
-                val queryText = prod.barcode.ifBlank { prod.nome }
-                val aiRes = aiService.analizzaBarcodeONome(queryText, forceNetwork = true)
-                if (!aiRes.isOfflinePending && !aiRes.categoria.equals("Da Catalogare", ignoreCase = true)) {
-                    val newNome = if (prod.nome.startsWith("Prodotto ")) aiRes.nome else prod.nome
-                    val newNote = if (prod.note.contains("offline", ignoreCase = true) || prod.note.isBlank()) {
-                        aiRes.note
-                    } else {
-                        "${prod.note} • ${aiRes.note}"
-                    }
-                    val newScadenza = if (prod.dataScadenza <= System.currentTimeMillis() + 86400000L) {
-                        System.currentTimeMillis() + (aiRes.giorniScadenzaStimati.toLong() * 86400000L)
-                    } else {
-                        prod.dataScadenza
-                    }
-                    
-                    val updated = prod.copy(
-                        nome = newNome,
-                        categoria = aiRes.categoria,
-                        posizione = aiRes.posizione,
-                        dataScadenza = newScadenza,
-                        note = newNote
-                    )
-                    repository.update(updated)
-                    countCatalogati++
+            isCatalogingOffline.value = true
+            try {
+                val pendingList = repository.getAllProdottiList().filter { 
+                    it.categoria.equals("Da Catalogare", ignoreCase = true) 
                 }
-            }
-            
-            if (countCatalogati > 0) {
-                batchFeedbackMessage.value = "✨ Catalogati con successo $countCatalogati prodotti dall'IA!"
+                if (pendingList.isEmpty()) {
+                    batchFeedbackMessage.value = "Nessun prodotto in attesa di catalogazione."
+                    onComplete?.invoke(0)
+                    return@launch
+                }
+
+                var countOnline = 0
+                var countFallback = 0
+
+                for (prod in pendingList) {
+                    val queryText = prod.barcode.ifBlank { prod.nome }
+                    val aiRes = aiService.analizzaBarcodeONome(queryText, forceNetwork = true)
+                    
+                    if (!aiRes.isOfflinePending && !aiRes.categoria.equals("Da Catalogare", ignoreCase = true)) {
+                        val newNome = if (prod.nome.startsWith("Prodotto ", ignoreCase = true) || prod.nome.isBlank()) {
+                            aiRes.nome
+                        } else {
+                            prod.nome
+                        }
+                        val newNote = if (prod.note.contains("offline", ignoreCase = true) || prod.note.isBlank()) {
+                            aiRes.note
+                        } else {
+                            "${prod.note} • ${aiRes.note}"
+                        }
+                        val newScadenza = if (prod.dataScadenza <= System.currentTimeMillis() + 86400000L) {
+                            System.currentTimeMillis() + (aiRes.giorniScadenzaStimati.toLong() * 86400000L)
+                        } else {
+                            prod.dataScadenza
+                        }
+                        
+                        val updated = prod.copy(
+                            nome = newNome,
+                            categoria = aiRes.categoria,
+                            posizione = aiRes.posizione,
+                            dataScadenza = newScadenza,
+                            note = newNote
+                        )
+                        repository.update(updated)
+                        countOnline++
+                    } else {
+                        // Fallback intelligente immediato: assegna la categoria corretta e toglie lo stato "Da Catalogare"
+                        val (cat, pos) = aiService.inferisciCategoriaDaNomeEBarcode(prod.nome, prod.barcode)
+                        val updated = prod.copy(
+                            categoria = cat,
+                            posizione = pos,
+                            note = if (prod.note.isBlank()) "Catalogato in dispensa" else prod.note
+                        )
+                        repository.update(updated)
+                        countFallback++
+                    }
+                }
+                
+                val total = countOnline + countFallback
+                if (countOnline > 0 && countFallback > 0) {
+                    batchFeedbackMessage.value = "✨ $countOnline prodotti riconosciuti online, $countFallback catalogati in dispensa!"
+                } else if (countOnline > 0) {
+                    batchFeedbackMessage.value = "✨ Catalogati con successo $countOnline prodott${if (countOnline == 1) "o" else "i"} con Open Food Facts!"
+                } else if (countFallback > 0) {
+                    batchFeedbackMessage.value = "✅ $countFallback prodott${if (countFallback == 1) "o" else "i"} catalogat${if (countFallback == 1) "o" else "i"} in dispensa!"
+                }
                 triggerAutoDriveBackup()
+                onComplete?.invoke(total)
+            } catch (e: Exception) {
+                batchFeedbackMessage.value = "⚠️ Errore catalogazione: ${e.message}"
+                onComplete?.invoke(0)
+            } finally {
+                isCatalogingOffline.value = false
             }
-            onComplete?.invoke(countCatalogati)
         }
     }
 
@@ -599,6 +636,8 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
             val trimmed = barcode.trim()
             if (trimmed.isBlank()) return@launch
 
+            BarcodeSoundFeedback.playScanBeep(getApplication())
+
             // Check if already in current carico session queue
             val existingIndex = caricoSessionQueue.value.indexOfFirst { it.barcode == trimmed }
             if (existingIndex >= 0) {
@@ -706,6 +745,8 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val trimmed = barcode.trim()
             if (trimmed.isBlank()) return@launch
+
+            BarcodeSoundFeedback.playScanBeep(getApplication())
 
             // Check if already in scarico session queue
             val existingIndex = scaricoSessionQueue.value.indexOfFirst { it.barcode == trimmed }

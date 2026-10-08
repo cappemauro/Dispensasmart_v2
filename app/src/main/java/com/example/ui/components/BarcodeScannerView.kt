@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.example.util.BarcodeSoundFeedback
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
@@ -72,6 +73,7 @@ fun BarcodeScannerView(
 
     var manualCodeInput by remember { mutableStateOf("") }
     var lastScannedCode by remember { mutableStateOf("") }
+    var lastScannedTimestamp by remember { mutableStateOf(0L) }
 
     LaunchedEffect(Unit) {
         if (!cameraPermissionState.status.isGranted) {
@@ -122,10 +124,13 @@ fun BarcodeScannerView(
                                     )
                                     scanner.process(image)
                                         .addOnSuccessListener { barcodes ->
+                                            val now = System.currentTimeMillis()
                                             for (barcode in barcodes) {
                                                 val raw = barcode.rawValue
-                                                if (!raw.isNullOrBlank() && raw != lastScannedCode) {
+                                                if (!raw.isNullOrBlank() && (raw != lastScannedCode || now - lastScannedTimestamp > 1800L)) {
                                                     lastScannedCode = raw
+                                                    lastScannedTimestamp = now
+                                                    BarcodeSoundFeedback.playScanBeep(ctx)
                                                     onBarcodeScanned(raw)
                                                 }
                                             }
@@ -234,7 +239,9 @@ fun BarcodeScannerView(
                     Button(
                         onClick = {
                             if (manualCodeInput.isNotBlank()) {
+                                BarcodeSoundFeedback.playScanBeep(context)
                                 onBarcodeScanned(manualCodeInput.trim())
+                                manualCodeInput = ""
                             }
                         },
                         modifier = Modifier.testTag("submit_manual_barcode")
@@ -246,32 +253,77 @@ fun BarcodeScannerView(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // Quick test barcode chips for instant interaction
-                Text(text = "Esempi rapidi per test:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(text = "Esempi rapidi per test immediato:", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Button(
-                        onClick = { onBarcodeScanned("8001234567890") },
+                        onClick = {
+                            BarcodeSoundFeedback.playScanBeep(context)
+                            onBarcodeScanned("8001234567890")
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Pasta 🍝", fontSize = 11.sp)
                     }
                     Button(
-                        onClick = { onBarcodeScanned("8008800123456") },
+                        onClick = {
+                            BarcodeSoundFeedback.playScanBeep(context)
+                            onBarcodeScanned("8008800123456")
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Latte 🥛", fontSize = 11.sp)
                     }
                     Button(
-                        onClick = { onBarcodeScanned("8000300000000") },
+                        onClick = {
+                            BarcodeSoundFeedback.playScanBeep(context)
+                            onBarcodeScanned("8000500310427")
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Nutella 🍫", fontSize = 11.sp)
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = {
+                            BarcodeSoundFeedback.playScanBeep(context)
+                            onBarcodeScanned("8000300000000")
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Piselli 🫛", fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = {
+                            BarcodeSoundFeedback.playScanBeep(context)
+                            onBarcodeScanned("5449000000996")
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Coca-Cola 🥤", fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = {
+                            BarcodeSoundFeedback.playScanBeep(context)
+                            onBarcodeScanned("8000500000000")
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Mutti 🍅", fontSize = 11.sp)
                     }
                 }
             }
