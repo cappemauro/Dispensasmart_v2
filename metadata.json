@@ -1,0 +1,6 @@
+{
+  "name": "Dispensa di Fede e Mauro",
+  "description": "Applicazione smart per la gestione della dispensa con scansione barcode, scadenze e sincronizzazione cloud.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

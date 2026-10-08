@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Dispensa di Fede e Mauro</string>
+    <string name="accessibility_service_description">Permette di sbloccare automaticamente il dispositivo in Modalità Cantina tramite l\'inserimento di PIN o l\'esecuzione di Swipe programmati.</string>
+</resources>
