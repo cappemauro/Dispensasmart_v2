@@ -158,20 +158,14 @@ fun ModuloDispensaScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Box(
+                            Image(
+                                painter = painterResource(id = R.drawable.img_app_icon_1784886411263),
+                                contentDescription = "Logo Dispensa",
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(ForestGreenPrimary.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Kitchen,
-                                    contentDescription = "Dispensa",
-                                    tint = ForestGreenPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(

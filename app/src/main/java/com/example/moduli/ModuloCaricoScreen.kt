@@ -144,7 +144,48 @@ fun ModuloCaricoScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Banner Stato IA Gemini Ricerca Web
+        val isGeminiConfigured = viewModel.isGeminiApiKeyConfigured
+        Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isGeminiConfigured) Color(0xFFE8F5E9) else Color(0xFFFFF8E1)
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = "Gemini AI",
+                    tint = if (isGeminiConfigured) ForestGreenPrimary else Color(0xFFF57F17),
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = if (isGeminiConfigured) "✨ Ricerca Web Gemini (3.5 Flash) ATTIVA" else "🤖 Ricerca Barcode con IA Gemini",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = if (isGeminiConfigured) ForestGreenPrimary else Color(0xFFE65100)
+                    )
+                    Text(
+                        text = if (isGeminiConfigured) 
+                            "Ogni barcode scansionato viene cercato su internet per identificare marca, formato e conservazione corretta."
+                        else 
+                            "Per riconoscere qualsiasi prodotto dal barcode tramite internet, configura GEMINI_API_KEY nei Secrets di AI Studio.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Mode Selector
         TabRow(
@@ -295,7 +336,12 @@ fun ModuloCaricoScreen(
                                                 )
                                             } else if (item.isAiRecognized) {
                                                 Text(
-                                                    text = if (item.categoria.equals("Da Catalogare", ignoreCase = true)) "⚡ Scansionato offline (Da catalogare)" else "🤖 Riconosciuto da IA",
+                                                    text = if (item.categoria.equals("Da Catalogare", ignoreCase = true)) 
+                                                        "⚡ Scansionato offline (Da catalogare)" 
+                                                    else if (item.note.isNotBlank()) 
+                                                        item.note 
+                                                    else 
+                                                        "🤖 Riconosciuto da IA Gemini",
                                                     fontSize = 10.sp,
                                                     fontWeight = FontWeight.Bold,
                                                     color = MaterialTheme.colorScheme.tertiary
@@ -432,16 +478,51 @@ fun ModuloCaricoScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Barcode
+                    // Barcode con pulsante di ricerca IA Gemini
                     OutlinedTextField(
                         value = barcode,
                         onValueChange = { barcode = it },
                         label = { Text("Codice a Barre (Barcode)") },
                         singleLine = true,
+                        trailingIcon = {
+                            if (barcode.isNotBlank()) {
+                                IconButton(
+                                    onClick = {
+                                        viewModel.analizzaInputIA(barcode) { aiRes ->
+                                            if (aiRes.nome.isNotBlank() && !aiRes.nome.startsWith("Prodotto $barcode")) {
+                                                nome = aiRes.nome
+                                            }
+                                            categoria = aiRes.categoria
+                                            posizione = aiRes.posizione
+                                            dataScadenza = System.currentTimeMillis() + (aiRes.giorniScadenzaStimati.toLong() * 86400000L)
+                                            isAiAutoFilled = true
+                                            if (aiRes.note.isNotBlank()) {
+                                                note = aiRes.note
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "Cerca con IA Gemini",
+                                        tint = ForestGreenPrimary
+                                    )
+                                }
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("input_barcode")
                     )
+
+                    if (barcode.isNotBlank()) {
+                        Text(
+                            text = "Tocca l'icona ✨ per cercare questo codice a barre su internet con Gemini AI",
+                            fontSize = 11.sp,
+                            color = ForestGreenPrimary,
+                            modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(12.dp))
 

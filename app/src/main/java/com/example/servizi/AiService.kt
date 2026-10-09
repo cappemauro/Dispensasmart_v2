@@ -22,12 +22,19 @@ data class AiProductResult(
 )
 
 class AiService {
+    // Timeout aumentato a 30s per consentire a Gemini di eseguire la ricerca sul web (Google Search grounding)
     private val client = OkHttpClient.Builder()
-        .connectTimeout(6, TimeUnit.SECONDS)
-        .readTimeout(6, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    // Ricco dizionario locale per prodotti italiani comuni e test istantaneo senza rete
+    private val fastFallbackClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
+
+    // Ricco dizionario locale di test rapido per prodotti italiani comuni (utilizzato se offline o senza API key)
     private val barcodeDictionary = mapOf(
         // Pasta e Cereali
         "8001234567890" to AiProductResult("Spaghetti Barilla n.5 500g", "Dispensa Secca", "Dispensa", 730, "Mantenere in luogo fresco e asciutto"),
@@ -89,6 +96,15 @@ class AiService {
         "8004260000000" to AiProductResult("Carta Igienica Scottex L'Originale 4 rotoli", "Igiene/Casa", "Dispensa", 1825, "Carta igienica morbida")
     )
 
+    fun isGeminiConfigured(): Boolean {
+        return try {
+            val key = BuildConfig.GEMINI_API_KEY
+            key.isNotBlank() && key != "MY_GEMINI_API_KEY"
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     suspend fun analizzaBarcodeONome(barcodeONome: String, forceNetwork: Boolean = false): AiProductResult = withContext(Dispatchers.IO) {
         val trimmed = barcodeONome.trim()
         if (trimmed.isBlank()) {
@@ -97,28 +113,7 @@ class AiService {
 
         val isBarcodeDigits = trimmed.matches(Regex("^\\d{8,14}$"))
 
-        // 1. Controlla il dizionario locale predefinito
-        barcodeDictionary[trimmed]?.let {
-            return@withContext it
-        }
-
-        // 2. Se è un codice a barre numerico, interroga OPEN FOOD FACTS (endpoint prioritario italiano)
-        if (isBarcodeDigits) {
-            val offResult = cercaSuOpenFoodFacts(trimmed)
-            if (offResult != null) {
-                return@withContext offResult
-            }
-        }
-
-        // 3. Se è una stringa testuale o barcode non trovato su OFF, prova la ricerca testuale su Open Food Facts
-        if (!isBarcodeDigits) {
-            val offSearch = cercaPerNomeSuOpenFoodFacts(trimmed)
-            if (offSearch != null) {
-                return@withContext offSearch
-            }
-        }
-
-        // 4. Prova chiamata Gemini API (se configurata dall'utente)
+        // 1. PRIORITÀ ASSOLUTA: Ricerca su Internet con Intelligenza Artificiale Gemini 3.5 Flash (Google Search Grounding)
         val apiKey = try {
             BuildConfig.GEMINI_API_KEY
         } catch (_: Exception) {
@@ -126,13 +121,31 @@ class AiService {
         }
 
         if (apiKey.isNotBlank() && apiKey != "MY_GEMINI_API_KEY") {
-            val geminiResult = analizzaConGemini(trimmed, apiKey)
-            if (geminiResult != null) {
+            val geminiResult = analizzaConGeminiERicercaWeb(trimmed, apiKey)
+            if (geminiResult != null && geminiResult.nome.isNotBlank() && !geminiResult.nome.startsWith("Prodotto $trimmed")) {
                 return@withContext geminiResult
             }
         }
 
-        // 5. Euristica intelligente su parole chiave italiane (per nomi digitati)
+        // 2. Controllo catalogo preimpostato locale (test istantaneo e fallback se senza rete/chiave)
+        barcodeDictionary[trimmed]?.let {
+            return@withContext it.copy(note = "📦 Catalogo locale predefinito")
+        }
+
+        // 3. Fallback secondario di sicurezza (database pubblico per quando manca la connessione o l'API key)
+        if (isBarcodeDigits) {
+            val offResult = cercaSuOpenFoodFacts(trimmed)
+            if (offResult != null) {
+                return@withContext offResult
+            }
+        } else {
+            val offSearch = cercaPerNomeSuOpenFoodFacts(trimmed)
+            if (offSearch != null) {
+                return@withContext offSearch
+            }
+        }
+
+        // 4. Euristica su parole chiave italiane (per nomi digitati)
         if (!isBarcodeDigits) {
             val euristica = analizzaConParoleChiave(trimmed)
             if (euristica != null) {
@@ -140,9 +153,7 @@ class AiService {
             }
         }
 
-        // 6. Se è richiesta catalogazione forzata (tasto "Cataloga Ora"):
-        // Non lasciamo il prodotto bloccato in "Da Catalogare" a vuoto!
-        // Assegniamo una catalogazione sensata in Dispensa Secca o in base ai caratteri del nome
+        // 5. Se è richiesta catalogazione forzata (pulsante "Cataloga Ora")
         if (forceNetwork) {
             val isItalianBarcode = isBarcodeDigits && trimmed.startsWith("80")
             val nomeAssegnato = if (isItalianBarcode) "Prodotto Italiano ($trimmed)" else if (isBarcodeDigits) "Prodotto $trimmed" else trimmed
@@ -157,8 +168,236 @@ class AiService {
             )
         }
 
-        // 7. Fallback predefinito se non identificato (in attesa di connessione)
+        // 6. Fallback finale offline
         stimaOfflineFallback(trimmed)
+    }
+
+    /**
+     * Esegue la ricerca sul web tramite Gemini 3.5 Flash e Google Search Grounding.
+     * Cerca il codice a barre su internet per identificare marca, nome, formato, categoria e conservazione.
+     */
+    private fun analizzaConGeminiERicercaWeb(query: String, apiKey: String): AiProductResult? {
+        val isBarcodeDigits = query.matches(Regex("^\\d{8,14}$"))
+
+        val promptText = if (isBarcodeDigits) {
+            """
+                Esegui una ricerca su internet per il codice a barre (EAN / UPC / GTIN): "$query".
+                Trova il prodotto commerciale reale corrispondente venduto nei supermercati o negozi (alimentari, bevande, surgelati, cura della persona, igiene della casa, ecc.).
+                Fornisci:
+                - "nome": Nome commerciale esatto e completo in italiano con Marca e Formato/Peso (es. "Pasta Barilla Spaghetti n.5 500g", "Bagnoschiuma Felce Azzurra Classico 650ml", "Coca-Cola Zero 330ml").
+                - "categoria": Scegli ESATTAMENTE una tra: "Dispensa Secca", "Frigo", "Surgelati", "Bevande", "Igiene/Casa", "Altro".
+                - "posizione": Scegli ESATTAMENTE una tra: "Dispensa", "Frigo", "Freezer".
+                - "giorniScadenzaStimati": Numero intero di giorni stimati di conservazione tipica (es. 10 per latte fresco, 730 per pasta o conserve, 180 per surgelati, 1095 per igiene/casa).
+                - "note": Brevissima nota utile sulla conservazione o dettagli prodotto.
+
+                Rispondi ESCLUSIVAMENTE con un JSON valido con questa struttura (nessun testo introduttivo né markdown):
+                {
+                  "nome": "Marca e Nome Prodotto Formato",
+                  "categoria": "Dispensa Secca",
+                  "posizione": "Dispensa",
+                  "giorniScadenzaStimati": 365,
+                  "note": "Riconosciuto da Gemini"
+                }
+            """.trimIndent()
+        } else {
+            """
+                Esegui una ricerca o analisi per il prodotto: "$query".
+                Fornisci:
+                - "nome": Nome commerciale corretto in italiano con marca e formato.
+                - "categoria": Scegli ESATTAMENTE una tra: "Dispensa Secca", "Frigo", "Surgelati", "Bevande", "Igiene/Casa", "Altro".
+                - "posizione": Scegli ESATTAMENTE una tra: "Dispensa", "Frigo", "Freezer".
+                - "giorniScadenzaStimati": Numero intero di giorni stimati di conservazione.
+                - "note": Brevissima indicazione utile.
+
+                Rispondi ESCLUSIVAMENTE con un JSON valido:
+                {
+                  "nome": "Nome Prodotto",
+                  "categoria": "Dispensa Secca",
+                  "posizione": "Dispensa",
+                  "giorniScadenzaStimati": 365,
+                  "note": "Riconosciuto da Gemini"
+                }
+            """.trimIndent()
+        }
+
+        // Tentativo 1: Chiamata Gemini 3.5 Flash con strumento Google Search Grounding per ricerca su internet live
+        try {
+            val jsonWithSearch = JSONObject().apply {
+                put("contents", org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("parts", org.json.JSONArray().apply {
+                            put(JSONObject().apply { put("text", promptText) })
+                        })
+                    })
+                })
+                put("tools", org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("google_search", JSONObject())
+                    })
+                })
+            }
+
+            val request = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+                .post(jsonWithSearch.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val responseBody = response.body?.string() ?: ""
+                val res = parseGeminiResponse(responseBody, query)
+                if (res != null) {
+                    return res
+                }
+            } else {
+                Log.w("AiService", "Gemini google_search code ${response.code}: ${response.message}")
+            }
+        } catch (e: Exception) {
+            Log.w("AiService", "Tentativo ricerca web Gemini fallito: ${e.message}")
+        }
+
+        // Tentativo 2: Chiamata alternativa con strumento camelCase `googleSearch`
+        try {
+            val jsonWithSearchCamel = JSONObject().apply {
+                put("contents", org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("parts", org.json.JSONArray().apply {
+                            put(JSONObject().apply { put("text", promptText) })
+                        })
+                    })
+                })
+                put("tools", org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("googleSearch", JSONObject())
+                    })
+                })
+            }
+
+            val requestCamel = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+                .post(jsonWithSearchCamel.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val responseCamel = client.newCall(requestCamel).execute()
+            if (responseCamel.isSuccessful) {
+                val responseBody = responseCamel.body?.string() ?: ""
+                val res = parseGeminiResponse(responseBody, query)
+                if (res != null) {
+                    return res
+                }
+            }
+        } catch (_: Exception) {}
+
+        // Tentativo 3: Fallback Gemini 3.5 Flash diretto in modalità JSON strutturata (conoscenza interna di EAN/barcodes)
+        try {
+            val jsonDirect = JSONObject().apply {
+                put("contents", org.json.JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("parts", org.json.JSONArray().apply {
+                            put(JSONObject().apply { put("text", promptText) })
+                        })
+                    })
+                })
+                put("generationConfig", JSONObject().apply {
+                    put("responseMimeType", "application/json")
+                })
+            }
+
+            val requestDirect = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey")
+                .post(jsonDirect.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val responseDirect = client.newCall(requestDirect).execute()
+            if (responseDirect.isSuccessful) {
+                val responseBody = responseDirect.body?.string() ?: ""
+                val res = parseGeminiResponse(responseBody, query)
+                if (res != null) {
+                    return res
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("AiService", "Fallback Gemini diretto fallito: ${e.message}")
+        }
+
+        return null
+    }
+
+    private fun parseGeminiResponse(responseBody: String, query: String): AiProductResult? {
+        try {
+            val rootJson = JSONObject(responseBody)
+            val candidates = rootJson.optJSONArray("candidates") ?: return null
+            if (candidates.length() == 0) return null
+
+            val candidate = candidates.getJSONObject(0)
+            val content = candidate.optJSONObject("content") ?: return null
+            val parts = content.optJSONArray("parts") ?: return null
+
+            var rawText = ""
+            for (i in 0 until parts.length()) {
+                val p = parts.getJSONObject(i)
+                val t = p.optString("text")
+                if (t.isNotBlank()) {
+                    rawText += t + "\n"
+                }
+            }
+
+            val resJson = estraiJsonDaTesto(rawText) ?: return null
+            val nome = resJson.optString("nome").trim()
+            if (nome.isBlank() || nome.equals("null", ignoreCase = true) || nome.equals("Sconosciuto", ignoreCase = true) || nome.startsWith("Prodotto $query")) {
+                return null
+            }
+
+            val categoria = normalizzaCategoria(resJson.optString("categoria", "Dispensa Secca"))
+            val posizione = normalizzaPosizione(resJson.optString("posizione", "Dispensa"))
+            var giorni = resJson.optInt("giorniScadenzaStimati", 0)
+            if (giorni <= 0) {
+                giorni = inferisciGiorniPerCategoria(categoria, posizione)
+            }
+            val noteRaw = resJson.optString("note").trim()
+            val noteFinale = if (noteRaw.isNotBlank() && !noteRaw.equals("null", ignoreCase = true)) {
+                "🔍 Ricerca Web Gemini: $noteRaw"
+            } else {
+                "🔍 Riconosciuto da Gemini con ricerca web"
+            }
+
+            return AiProductResult(
+                nome = nome,
+                categoria = categoria,
+                posizione = posizione,
+                giorniScadenzaStimati = giorni,
+                note = noteFinale,
+                isOfflinePending = false
+            )
+        } catch (e: Exception) {
+            Log.w("AiService", "Errore nel parsing della risposta Gemini: ${e.message}")
+            return null
+        }
+    }
+
+    private fun estraiJsonDaTesto(rawText: String): JSONObject? {
+        try {
+            val trimmed = rawText.trim()
+            val firstBrace = trimmed.indexOf('{')
+            val lastBrace = trimmed.lastIndexOf('}')
+            if (firstBrace != -1 && lastBrace != -1 && lastBrace > firstBrace) {
+                val jsonCandidate = trimmed.substring(firstBrace, lastBrace + 1)
+                return JSONObject(jsonCandidate)
+            }
+        } catch (e: Exception) {
+            Log.w("AiService", "estraiJsonDaTesto fallito: ${e.message}")
+        }
+        return null
+    }
+
+    private fun inferisciGiorniPerCategoria(categoria: String, posizione: String): Int {
+        return when {
+            posizione.equals("Frigo", ignoreCase = true) || categoria.equals("Frigo", ignoreCase = true) -> 14
+            posizione.equals("Freezer", ignoreCase = true) || categoria.equals("Surgelati", ignoreCase = true) -> 180
+            categoria.equals("Bevande", ignoreCase = true) -> 365
+            categoria.equals("Igiene/Casa", ignoreCase = true) -> 730
+            else -> 365
+        }
     }
 
     private fun cercaSuOpenFoodFacts(barcode: String): AiProductResult? {
@@ -166,11 +405,9 @@ class AiService {
         val barcodesToTry = if (cleanBarcode.length == 12) listOf(cleanBarcode, "0$cleanBarcode") else listOf(cleanBarcode)
 
         for (code in barcodesToTry) {
-            // URL con precedenza all'istanza italiana v2 con campi ridotti (ultra veloce)
             val urls = listOf(
                 "https://it.openfoodfacts.org/api/v2/product/$code?fields=product_name,product_name_it,generic_name_it,generic_name,brands,quantity,categories",
-                "https://world.openfoodfacts.org/api/v2/product/$code?fields=product_name,product_name_it,generic_name_it,generic_name,brands,quantity,categories",
-                "https://world.openfoodfacts.org/api/v0/product/$code.json"
+                "https://world.openfoodfacts.org/api/v2/product/$code?fields=product_name,product_name_it,generic_name_it,generic_name,brands,quantity,categories"
             )
 
             for (url in urls) {
@@ -181,7 +418,7 @@ class AiService {
                         .get()
                         .build()
 
-                    val response = client.newCall(request).execute()
+                    val response = fastFallbackClient.newCall(request).execute()
                     if (response.isSuccessful) {
                         val body = response.body?.string() ?: ""
                         val json = JSONObject(body)
@@ -206,7 +443,6 @@ class AiService {
                                 else -> "Prodotto $code"
                             }
 
-                            // Aggiungi brand al nome se non presente
                             if (brand.isNotBlank() && !nomeFinale.contains(brand, ignoreCase = true)) {
                                 nomeFinale = "$brand $nomeFinale"
                             }
@@ -226,9 +462,7 @@ class AiService {
                             )
                         }
                     }
-                } catch (e: Exception) {
-                    Log.w("AiService", "Tentativo Open Food Facts su $url: ${e.message}")
-                }
+                } catch (_: Exception) {}
             }
         }
         return null
@@ -244,7 +478,7 @@ class AiService {
                 .get()
                 .build()
 
-            val response = client.newCall(request).execute()
+            val response = fastFallbackClient.newCall(request).execute()
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: ""
                 val json = JSONObject(body)
@@ -267,67 +501,6 @@ class AiService {
                 }
             }
         } catch (_: Exception) {}
-        return null
-    }
-
-    private fun analizzaConGemini(trimmed: String, apiKey: String): AiProductResult? {
-        try {
-            val promptText = """
-                Analizza il seguente prodotto alimentare o codice a barre: "$trimmed".
-                Rispondi ESCLUSIVAMENTE con un JSON valido con i campi:
-                {
-                  "nome": "Nome del prodotto in italiano",
-                  "categoria": "Una tra: Dispensa Secca, Frigo, Surgelati, Bevande, Igiene/Casa, Altro",
-                  "posizione": "Una tra: Frigo, Dispensa, Freezer",
-                  "giorniScadenzaStimati": numero intero di giorni stimati di conservazione,
-                  "note": "Breve indicazione conservazione"
-                }
-            """.trimIndent()
-
-            val jsonRequest = JSONObject().apply {
-                put("contents", org.json.JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("parts", org.json.JSONArray().apply {
-                            put(JSONObject().apply { put("text", promptText) })
-                        })
-                    })
-                })
-                put("generationConfig", JSONObject().apply {
-                    put("responseMimeType", "application/json")
-                })
-            }
-
-            val request = Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
-                .post(jsonRequest.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val responseBody = response.body?.string() ?: ""
-                val rootJson = JSONObject(responseBody)
-                val candidates = rootJson.optJSONArray("candidates")
-                if (candidates != null && candidates.length() > 0) {
-                    val text = candidates.getJSONObject(0)
-                        .getJSONObject("content")
-                        .getJSONArray("parts")
-                        .getJSONObject(0)
-                        .getString("text")
-
-                    val res = JSONObject(text)
-                    return AiProductResult(
-                        nome = res.optString("nome", trimmed),
-                        categoria = normalizzaCategoria(res.optString("categoria", "Dispensa Secca")),
-                        posizione = normalizzaPosizione(res.optString("posizione", "Dispensa")),
-                        giorniScadenzaStimati = res.optInt("giorniScadenzaStimati", 30),
-                        note = res.optString("note", "Analizzato con IA Gemini"),
-                        isOfflinePending = false
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            Log.w("AiService", "Gemini non disponibile o errore: ${e.message}")
-        }
         return null
     }
 

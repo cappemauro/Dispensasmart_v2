@@ -55,6 +55,8 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
     val syncService = SyncService(application)
     val backupService = BackupExportService(application)
 
+    val isGeminiApiKeyConfigured: Boolean get() = aiService.isGeminiConfigured()
+
     val syncState: StateFlow<SyncStatusState> = syncService.syncState
     val driveState: StateFlow<GoogleDriveState> = backupService.driveState
 
@@ -711,28 +713,27 @@ class DispensaViewModel(application: Application) : AndroidViewModel(application
         val trimmed = barcode.trim()
         if (trimmed.isBlank()) return Pair(null, null)
 
-        // 1. Direct barcode match in DB
-        val dbMatch = repository.getProdottoByBarcode(trimmed)
+        // 1. Ricerca diretta per codice a barre nel DB locale
+        val allProdottiList = repository.getAllProdottiList()
+        val dbMatch = allProdottiList.firstOrNull { prod ->
+            prod.barcode.split(",").map { it.trim() }.contains(trimmed) || prod.barcode.trim() == trimmed
+        }
         if (dbMatch != null) {
             return Pair(dbMatch, null)
         }
 
-        // 2. AI Analysis for barcode/type
-        val aiResult = aiService.analizzaBarcodeONome(trimmed)
+        // 2. Analisi avanzata tramite Intelligenza Artificiale Gemini 3.5 Flash e ricerca su internet
+        val aiResult = aiService.analizzaBarcodeONome(trimmed, forceNetwork = true)
 
-        // 3. Search DB by AI Product Name keywords or Category
-        val allProdottiList = repository.getAllProdottiList()
-        val firstKeyword = aiResult.nome.split(" ").firstOrNull { it.length > 3 } ?: aiResult.nome
-        
+        // 3. Associa a un prodotto esistente SOLO se il nome coincide esattamente (evita unificazioni errate di prodotti diversi)
         val matchedExisting = allProdottiList.firstOrNull { prod ->
-            prod.nome.contains(firstKeyword, ignoreCase = true) ||
-            prod.barcode.contains(trimmed) ||
-            (prod.categoria.equals(aiResult.categoria, ignoreCase = true) && prod.nome.contains(firstKeyword, ignoreCase = true))
+            prod.nome.trim().equals(aiResult.nome.trim(), ignoreCase = true)
         }
 
         if (matchedExisting != null) {
-            // Append new barcode to existing product if missing
-            if (!matchedExisting.barcode.contains(trimmed)) {
+            // Aggiungi il nuovo barcode al prodotto esistente
+            val currentBarcodes = matchedExisting.barcode.split(",").map { it.trim() }.filter { it.isNotBlank() }
+            if (!currentBarcodes.contains(trimmed)) {
                 val updatedBarcodes = if (matchedExisting.barcode.isBlank()) trimmed else "${matchedExisting.barcode}, $trimmed"
                 val updated = matchedExisting.copy(barcode = updatedBarcodes)
                 repository.update(updated)

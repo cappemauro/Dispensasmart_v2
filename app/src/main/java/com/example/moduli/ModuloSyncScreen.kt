@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
@@ -188,6 +189,12 @@ fun ModuloSyncScreen(
                 onClick = { activeTab = 2 },
                 text = { Text("Cantina 🍷", fontWeight = FontWeight.Bold, fontSize = 12.sp) },
                 modifier = Modifier.testTag("tab_cantina")
+            )
+            Tab(
+                selected = activeTab == 3,
+                onClick = { activeTab = 3 },
+                text = { Text("IA Gemini 🤖", fontWeight = FontWeight.Bold, fontSize = 12.sp) },
+                modifier = Modifier.testTag("tab_gemini_ai")
             )
         }
 
@@ -1093,6 +1100,146 @@ fun ModuloSyncScreen(
         } else if (activeTab == 2) {
             // --- TAB 2: CANTINA MODE ---
             ModuloCantinaScreen()
+        } else if (activeTab == 3) {
+            // --- TAB 3: INTELLIGENZA ARTIFICIALE GEMINI 3.5 FLASH & RICERCA WEB LIVE ---
+            val isGeminiConfigured = viewModel.isGeminiApiKeyConfigured
+            var testBarcode by remember { mutableStateOf("") }
+            var testResult by remember { mutableStateOf<com.example.servizi.AiProductResult?>(null) }
+            var isTesting by remember { mutableStateOf(false) }
+
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isGeminiConfigured) Color(0xFFE8F5E9) else Color(0xFFFFF8E1)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Gemini",
+                            tint = if (isGeminiConfigured) ForestGreenPrimary else Color(0xFFF57F17),
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = "Gemini 3.5 Flash con Ricerca Web",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (isGeminiConfigured) "Stato: ATTIVO E PRONTO ALL'USO 🟢" else "Stato: IN ATTESA DI API KEY 🟡",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isGeminiConfigured) ForestGreenPrimary else Color(0xFFE65100)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "A differenza dei database esterni parziali, Gemini 3.5 Flash con Google Search Grounding effettua una ricerca su internet in tempo reale sul codice a barre esatto per identificare marca, formato, categoria e conservazione ottimale per qualsiasi prodotto.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Guida configurazione passo-passo
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Istruzioni per l'attivazione passo-passo 🔑",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "1. Ottieni una chiave gratuita su https://aistudio.google.com/apikey\n" +
+                               "2. Nel menu di AI Studio Build, apri la scheda 'Secrets' (icona della chiave).\n" +
+                               "3. Aggiungi il segreto con nome GEMINI_API_KEY\n" +
+                               "4. Incolla il valore della tua chiave API.\n" +
+                               "5. Fatto! L'app riconoscerà automaticamente qualsiasi barcode effettuando la ricerca live sul web.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Strumento di test interattivo
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Testa la ricerca su internet di un Barcode 🔍",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = testBarcode,
+                        onValueChange = { testBarcode = it },
+                        label = { Text("Codice a barre (es. 8001234567890)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = {
+                            if (testBarcode.isNotBlank()) {
+                                isTesting = true
+                                testResult = null
+                                viewModel.analizzaInputIA(testBarcode) { res ->
+                                    testResult = res
+                                    isTesting = false
+                                }
+                            }
+                        },
+                        enabled = !isTesting && testBarcode.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = ForestGreenPrimary),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isTesting) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Ricerca in corso...")
+                        } else {
+                            Text("Cerca con Gemini Web ✨")
+                        }
+                    }
+
+                    if (testResult != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(text = "Risultato trovato:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text(text = "Nome: ${testResult!!.nome}", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text(text = "Categoria: ${testResult!!.categoria} • Posizione: ${testResult!!.posizione}", fontSize = 12.sp)
+                                Text(text = "Scadenza stimata: ${testResult!!.giorniScadenzaStimati} giorni", fontSize = 12.sp)
+                                if (testResult!!.note.isNotBlank()) {
+                                    Text(text = "Note: ${testResult!!.note}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
